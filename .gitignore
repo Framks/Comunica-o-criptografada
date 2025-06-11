@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env
+venv/
+ENV/
+.venv/
+
+# Chaves privadas e arquivos sensíveis
+*.pem
+*.key
+*.crt
+*.der
+*.p12
+*.pfx
+
+# VSCode
+.vscode/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Arquivos temporários
+*.log
+*.tmp
+*.bak
+
+# Outros
+*.swp
+*.swo
+
+# Ignore arquivos de exemplo de chave pública, mas NÃO ignore .pub (útil para GitHub)
+!*.pub
