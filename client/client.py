@@ -50,6 +50,15 @@ def derivacao_chaves(S_bytes):
     print('Chaves derivadas com sucesso.')
     return key_aes, key_hmac
 
+def recv_all(sock, n):
+    data = b''
+    while len(data) < n:
+        packet = sock.recv(n - len(data))
+        if not packet:
+            return None
+        data += packet
+    return data
+
 def main():
     print("Para começar vc tem que ter uma chave privada ECDSA gerada com o comando:")
     print("openssl ecparam -name prime256v1 -genkey -noout -out cliente_ecdsa.pem")
@@ -73,32 +82,24 @@ def main():
         with open(privKeyPath, 'rb') as f:
             privkey = serialization.load_pem_private_key(f.read(), password=None) # Carrega a chave privada ECDSA do cliente
         sig_A = privkey.sign(A_bytes + username.encode(), ec.ECDSA(hashes.SHA256())) # Assina A + username com a chave privada ECDSA
-
+        sig_A_len = len(sig_A)
         user_bytes = username.encode().ljust(32, b'\x00')
-        print(f'Username bytes: {user_bytes}')
-        print(f'tamanho de A_bytes: {len(A_bytes)}')
-        print(f'tamanho de sig_A: {len(sig_A)}')
-        print(f'tamanho de user_bytes: {len(user_bytes)}')
-        print('=====================================================')
-        s.sendall(A_bytes + sig_A + user_bytes)
-        print('pacote sendo enviado: ', A_bytes + sig_A + user_bytes)
-        print('=====================================================')
+        # Envia A, tamanho da assinatura, assinatura, username
+        s.sendall(A_bytes + sig_A_len.to_bytes(1, 'big') + sig_A + user_bytes)
         # Recebe B, sig_B, username_servidor
         tam_B = 512
-        tam_sig = 71
+        tam_sig_len = 1
         tam_user = 32
-
-        header = s.recv(tam_B + tam_sig + tam_user) # Recebe o pacote do servidor 
-        print(f'Header recebido: {header.hex()}')
-        print('=====================================================')
-        print(f'Tamanho do header: {len(header)} bytes')
-        B_bytes = header[:tam_B] # Extrai B (512 bits)
-        sig_B = header[tam_B:tam_B+tam_sig] # Extrai assinatura do servidor (72 bytes)
-        username_servidor = header[tam_B+tam_sig:].rstrip(b'\x00').decode() # Extrai username do servidor (32 bytes) 
-        
-        print(f'B_bytes: {B_bytes.hex()}')
-        print(f'sig_B: {sig_B.hex()}')
-        print(f'username_servidor: {username_servidor}')
+        header = recv_all(s, tam_B + tam_sig_len)
+        if not header:
+            print('Conexão encerrada prematuramente ao receber header do servidor.')
+            return
+        B_bytes = header[:tam_B]
+        sig_B_len = header[tam_B]
+        sig_B = recv_all(s, sig_B_len)
+        user_bytes = recv_all(s, tam_user)
+        username_servidor = user_bytes.rstrip(b'\x00').decode()
+        B = int.from_bytes(B_bytes, 'big')
 
         pubkey_servidor = baixar_chave_publica(username_servidor) # Baixa chave pública do servidor        
         verifica_assinatura(pubkey_servidor, sig_B, B_bytes, username_servidor) # Verifica assinatura do servidor

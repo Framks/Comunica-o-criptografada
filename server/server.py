@@ -80,21 +80,17 @@ def main():
             print('Conectado por', addr)
             
             tam_A = 512
-            tam_sig = 71  # Tamanho máximo da assinatura ECDSA 
-            tam_user = 32  # Limite username
-
-            header = recv_all(conn, tam_A + tam_sig + tam_user) # 1. Recebe A, sig_A, username_cliente 
+            tam_sig_len = 1
+            tam_user = 32
+            header = recv_all(conn, tam_A + tam_sig_len)
             if not header:
-                print('Conexão encerrada prematuramente.')
+                print('Conexão encerrada prematuramente ao receber header do cliente.')
                 return
-            
-            print('Header recebido:', header)
-            print('=====================================================')
-            print(f'Tamanho do header: {len(header)} bytes')
-            
             A_bytes = header[:tam_A]
-            sig_A = header[tam_A:tam_A+tam_sig]
-            username_cliente = header[tam_A+tam_sig:].rstrip(b'\x00').decode()
+            sig_A_len = header[tam_A]
+            sig_A = recv_all(conn, sig_A_len)
+            user_bytes = recv_all(conn, tam_user)
+            username_cliente = user_bytes.rstrip(b'\x00').decode()
             A = int.from_bytes(A_bytes, 'big')
 
             print(f'Cliente {username_cliente} enviou A: {A} (bytes: {A_bytes})')
@@ -116,14 +112,14 @@ def main():
                 privkey = serialization.load_pem_private_key(f.read(), password=None) # Carrega a chave privada ECDSA do servidor
             sig_B = privkey.sign(B_bytes + username.encode(), ec.ECDSA(hashes.SHA256())) # Assina B + username com a chave privada ECDSA
             user_bytes = username.encode().ljust(tam_user, b'\x00')
-
+            sig_B_len = len(sig_B)
             print(f'Username bytes: {user_bytes}')
             print(f'tamanho de B_bytes: {len(B_bytes)}')
             print(f'tamanho de sig_B: {len(sig_B)}')
             print(f'tamanho de user_bytes: {len(user_bytes)}')
             print('=====================================================')
             
-            conn.sendall(B_bytes + sig_B + user_bytes) # Envia B, sig_B, username_servidor
+            conn.sendall(B_bytes + sig_B_len.to_bytes(1, 'big') + sig_B + user_bytes) # Envia B, sig_B, username_servidor
 
             print('Pacote enviado:', B_bytes + sig_B + user_bytes)
             print('=====================================================')
@@ -146,7 +142,8 @@ def main():
             # 3. Loop de recebimento de mensagens seguras
             print('Aguardando mensagens do cliente. Pressione Ctrl+C para encerrar.')
             while True:
-                header = recv_all(conn, HMAC_LEN + IV_LEN)
+                # Leia o header completo: HMAC (32) + IV (16) + tam_cipher (4) = 52 bytes
+                header = recv_all(conn, HMAC_LEN + IV_LEN + 4)
                 if not header:
                     print('Conexão encerrada pelo cliente.')
                     break
@@ -159,10 +156,8 @@ def main():
                     break
                 # Verifica HMAC
                 hmac_calc = hmac.new(key_hmac, iv + ciphertext, hashlib.sha256).digest()
-                
                 print(f'HMAC recebido: {hmac_tag.hex()}')
                 print(f'HMAC calculado: {hmac_calc.hex()}')
-
                 if not hmac.compare_digest(hmac_tag, hmac_calc):
                     print('HMAC inválido! Mensagem rejeitada.')
                     continue
