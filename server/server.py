@@ -93,27 +93,28 @@ def main():
             username_cliente = user_bytes.rstrip(b'\x00').decode()
             A = int.from_bytes(A_bytes, 'big')
 
-            print(f'Cliente {username_cliente} enviou A: {A} (bytes: {A_bytes})')
-
+            print(f'Cliente {username_cliente} enviou A: (bytes: {A_bytes.hex()})')
+            print('=====================================================')
+            print('Baixando chave pública do cliente...')
             pubkey_cliente = baixar_chave_publica(username_cliente) # Baixa chave pública do cliente
             
             verifica_assinatura(pubkey_cliente, sig_A, A_bytes, username_cliente) # Verifica assinatura
             print(f'Assinatura do cliente {username_cliente} verificada.')
-
+            print('=====================================================')
+            print('Calculando chave pública B...')
             b = secrets.randbelow(p-2) + 2
             B = pow(g, b, p)
             B_bytes = B.to_bytes(512, 'big')
 
             print(f'B (bytes): {B_bytes.hex()}')
-            print(f'B (int): {B}')
-
-
+            print('=====================================================')
+            print(f'Enviando B, assinatura e username para o cliente {username_cliente}...')
             with open(privKeyPath, 'rb') as f:
                 privkey = serialization.load_pem_private_key(f.read(), password=None) # Carrega a chave privada ECDSA do servidor
             sig_B = privkey.sign(B_bytes + username.encode(), ec.ECDSA(hashes.SHA256())) # Assina B + username com a chave privada ECDSA
             user_bytes = username.encode().ljust(tam_user, b'\x00')
             sig_B_len = len(sig_B)
-            print(f'Username bytes: {user_bytes}')
+            
             print(f'tamanho de B_bytes: {len(B_bytes)}')
             print(f'tamanho de sig_B: {len(sig_B)}')
             print(f'tamanho de user_bytes: {len(user_bytes)}')
@@ -121,14 +122,13 @@ def main():
             
             conn.sendall(B_bytes + sig_B_len.to_bytes(1, 'big') + sig_B + user_bytes) # Envia B, sig_B, username_servidor
 
-            print('Pacote enviado:', B_bytes + sig_B + user_bytes)
+            print('Pacote enviado:', (B_bytes + sig_B + user_bytes).hex())
             print('=====================================================')
             # Calcula segredo compartilhado
             S = pow(A, b, p)
             S_bytes = S.to_bytes((S.bit_length()+7)//8, 'big')
 
             print(f'Segredo compartilhado S (bytes): {S_bytes.hex()}')
-            print(f'Segredo compartilhado S (int): {S}')
 
 
             # 2. Deriva chaves

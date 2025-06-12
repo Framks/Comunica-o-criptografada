@@ -73,23 +73,29 @@ def main():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((host, port))
         
-        # 1. Handshake DH + ECDSA
-        a = secrets.randbelow(p-2) + 2 # se eu gerar apenas um número aleatório normal ele pode não ser criptograficamente seguro, então uso secrets 
-        A = pow(g, a, p)    # Calcula A = g^a mod p
-        A_bytes = A.to_bytes(512, 'big') # Converte A para bytes (512 bits) 
+        a = secrets.randbelow(p-2) + 2
+        A = pow(g, a, p)
+        A_bytes = A.to_bytes(512, 'big')
+
+        print(f'Chave pública A: (bytes: {A_bytes.hex()})')
+        print('=====================================================')
         
-        # Carrega chave privada ECDSA
         with open(privKeyPath, 'rb') as f:
-            privkey = serialization.load_pem_private_key(f.read(), password=None) # Carrega a chave privada ECDSA do cliente
-        sig_A = privkey.sign(A_bytes + username.encode(), ec.ECDSA(hashes.SHA256())) # Assina A + username com a chave privada ECDSA
+            privkey = serialization.load_pem_private_key(f.read(), password=None)
+        sig_A = privkey.sign(A_bytes + username.encode(), ec.ECDSA(hashes.SHA256()))
+        print(f'Assinatura A: {sig_A.hex()} (tamanho: {len(sig_A)} bytes)')
+
         sig_A_len = len(sig_A)
         user_bytes = username.encode().ljust(32, b'\x00')
-        # Envia A, tamanho da assinatura, assinatura, username
+
+        print(f'Enviando (A_bytes + sig_A + username) para o servidor...')
         s.sendall(A_bytes + sig_A_len.to_bytes(1, 'big') + sig_A + user_bytes)
-        # Recebe B, sig_B, username_servidor
+
+
         tam_B = 512
         tam_sig_len = 1
         tam_user = 32
+        print('Recebendo B_bytes, sig_B e username do servidor...')
         header = recv_all(s, tam_B + tam_sig_len)
         if not header:
             print('Conexão encerrada prematuramente ao receber header do servidor.')
@@ -100,27 +106,30 @@ def main():
         user_bytes = recv_all(s, tam_user)
         username_servidor = user_bytes.rstrip(b'\x00').decode()
         B = int.from_bytes(B_bytes, 'big')
+        print(f'Servidor {username_servidor} enviou B: (bytes: {B_bytes.hex()})')
+        print(f'Signature length: {sig_B_len}, Signature: {sig_B.hex()}')
+        print('=====================================================')
+        print(f'Verificando assinatura do servidor {username_servidor}...')
 
-        pubkey_servidor = baixar_chave_publica(username_servidor) # Baixa chave pública do servidor        
-        verifica_assinatura(pubkey_servidor, sig_B, B_bytes, username_servidor) # Verifica assinatura do servidor
+        pubkey_servidor = baixar_chave_publica(username_servidor)     
+        verifica_assinatura(pubkey_servidor, sig_B, B_bytes, username_servidor)
         print(f'Assinatura do servidor {username_servidor} verificada.') 
+        print('=====================================================')
+        print('Calculando segredo compartilhado S...')
 
-        # Calcula segredo compartilhado
-        B = int.from_bytes(B_bytes, 'big') # Converte B de bytes para inteiro
+        B = int.from_bytes(B_bytes, 'big')
         S = pow(B, a, p)
-        S_bytes = S.to_bytes((S.bit_length()+7)//8, 'big') # garante que S_bytes tenha o tamanho correto para representar em bytes
-        
-        # 2. Deriva chaves
+        S_bytes = S.to_bytes((S.bit_length()+7)//8, 'big')
+
         key_aes, key_hmac = derivacao_chaves(S_bytes)
 
-        print(f'Secreto compartilhado S: {S} (bytes: {S_bytes.hex()})')
+        print(f'Secreto compartilhado S: (bytes: {S_bytes.hex()})')
         print(f'Chave AES: {key_aes.hex()}')
         print(f'Chave HMAC: {key_hmac.hex()}')
         print('Chaves derivadas com sucesso.')
         print('Conexão estabelecida com sucesso!')
         print('=====================================================')
 
-        # 3. Loop de chat
         print('Digite "/sair" para encerrar o chat.')
         while True:
             mensagem = input('Mensagem: ')
