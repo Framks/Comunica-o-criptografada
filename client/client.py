@@ -5,6 +5,7 @@ import hmac
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 from Crypto.Protocol.KDF import PBKDF2
+from Crypto.Hash import SHA256
 import requests
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -43,7 +44,7 @@ def verifica_assinatura(pubkey, sig_B, B_bytes, username_servidor):
         return
     
 def derivacao_chaves(S_bytes):
-    key_material = PBKDF2(S_bytes, SALT, dkLen=KEY_LEN*2, count=PBKDF2_ITER, hmac_hash_module=hashlib.sha256)
+    key_material = PBKDF2(S_bytes, SALT, dkLen=KEY_LEN*2, count=PBKDF2_ITER, hmac_hash_module=SHA256)
     key_aes = key_material[:KEY_LEN]
     key_hmac = key_material[KEY_LEN:]
     print('Chaves derivadas com sucesso.')
@@ -57,9 +58,9 @@ def main():
     print("Pressione Enter para continuar...")
     input()
     host = input('Digite o IP do servidor (default 127.0.0.1): ') or '127.0.0.1'
-    port = input('Digite a porta do servidor (default 65432): ') or 65432
+    port = input('Digite a porta do servidor (default 65432): ') or 65434
     privKeyPath = input('Digite o caminho para a chave privada ECDSA do cliente (default cliente_ecdsa.pem): ') or PRIVKEY_PATH
-    username = input('Digite seu username do GitHub (default Framks, e não maior que 32 caracteres): ') or USERNAME_CLIENTE
+    username = input('Digite seu username do GitHub (default Framks): ') or USERNAME_CLIENTE
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((host, port))
         
@@ -73,19 +74,24 @@ def main():
             privkey = serialization.load_pem_private_key(f.read(), password=None) # Carrega a chave privada ECDSA do cliente
         sig_A = privkey.sign(A_bytes + username.encode(), ec.ECDSA(hashes.SHA256())) # Assina A + username com a chave privada ECDSA
 
-        user_bytes = username.encode().ljust(32, b'\x00') 
+        user_bytes = username.encode().ljust(32, b'\x00')
         print(f'Username bytes: {user_bytes}')
+        print(f'tamanho de A_bytes: {len(A_bytes)}')
+        print(f'tamanho de sig_A: {len(sig_A)}')
+        print(f'tamanho de user_bytes: {len(user_bytes)}')
         print('=====================================================')
         s.sendall(A_bytes + sig_A + user_bytes)
         print('pacote sendo enviado: ', A_bytes + sig_A + user_bytes)
         print('=====================================================')
         # Recebe B, sig_B, username_servidor
         tam_B = 512
-        tam_sig = 72
+        tam_sig = 71
         tam_user = 32
 
         header = s.recv(tam_B + tam_sig + tam_user) # Recebe o pacote do servidor 
-        
+        print(f'Header recebido: {header.hex()}')
+        print('=====================================================')
+        print(f'Tamanho do header: {len(header)} bytes')
         B_bytes = header[:tam_B] # Extrai B (512 bits)
         sig_B = header[tam_B:tam_B+tam_sig] # Extrai assinatura do servidor (72 bytes)
         username_servidor = header[tam_B+tam_sig:].rstrip(b'\x00').decode() # Extrai username do servidor (32 bytes) 
@@ -106,6 +112,13 @@ def main():
         # 2. Deriva chaves
         key_aes, key_hmac = derivacao_chaves(S_bytes)
 
+        print(f'Secreto compartilhado S: {S} (bytes: {S_bytes.hex()})')
+        print(f'Chave AES: {key_aes.hex()}')
+        print(f'Chave HMAC: {key_hmac.hex()}')
+        print('Chaves derivadas com sucesso.')
+        print('Conexão estabelecida com sucesso!')
+        print('=====================================================')
+
         # 3. Loop de chat
         print('Digite "/sair" para encerrar o chat.')
         while True:
@@ -118,9 +131,9 @@ def main():
             cipher = AES.new(key_aes, AES.MODE_CBC, iv)
             ciphertext = cipher.encrypt(pad(msg_bytes, AES.block_size))
             hmac_tag = hmac.new(key_hmac, iv + ciphertext, hashlib.sha256).digest()
-            pacote = hmac_tag + iv + ciphertext
+            tam_cipher = len(ciphertext).to_bytes(4, 'big')
+            pacote = hmac_tag + iv + tam_cipher + ciphertext
             s.sendall(pacote)
             print('Mensagem enviada.')
-
 if __name__ == '__main__':
     main()

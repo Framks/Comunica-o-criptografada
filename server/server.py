@@ -6,6 +6,7 @@ import requests
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 from Crypto.Protocol.KDF import PBKDF2
+from Crypto.Hash import SHA256
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
@@ -17,7 +18,7 @@ p = int('''FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1\n29024E088A67CC74020
 g = 2
 
 HOST = '127.0.0.1'
-PORT = 65432
+PORT = 65434
 PRIVKEY_PATH = 'server_ecdsa.pem'  # Caminho padrão para a chave privada ECDSA do servidor
 
 # Tamanho das chaves
@@ -36,12 +37,14 @@ def baixar_chave_publica(username):
     r = requests.get(url)
     if r.status_code == 200:
         key_str = r.text.strip().splitlines()[0]
+        print(f'Chave pública ECDSA do cliente {username} baixada com sucesso.')
+        print(f'Chave: {key_str}')
         return serialization.load_ssh_public_key(key_str.encode(), backend=default_backend())
     else:
         raise Exception("Erro ao baixar chave pública")
 
 def derivacao_chaves(S_bytes):
-    key_material = PBKDF2(S_bytes, SALT, dkLen=KEY_LEN*2, count=PBKDF2_ITER, hmac_hash_module=hashlib.sha256)
+    key_material = PBKDF2(S_bytes, SALT, dkLen=KEY_LEN*2, count=PBKDF2_ITER, hmac_hash_module=SHA256)
     key_aes = key_material[:KEY_LEN]
     key_hmac = key_material[KEY_LEN:]
     print('Chaves derivadas com sucesso.')
@@ -77,20 +80,24 @@ def main():
             print('Conectado por', addr)
             
             tam_A = 512
-            tam_sig = 72  # Tamanho máximo da assinatura ECDSA 
+            tam_sig = 71  # Tamanho máximo da assinatura ECDSA 
             tam_user = 32  # Limite username
 
             header = recv_all(conn, tam_A + tam_sig + tam_user) # 1. Recebe A, sig_A, username_cliente 
-            
             if not header:
                 print('Conexão encerrada prematuramente.')
                 return
             
+            print('Header recebido:', header)
+            print('=====================================================')
+            print(f'Tamanho do header: {len(header)} bytes')
+            
             A_bytes = header[:tam_A]
             sig_A = header[tam_A:tam_A+tam_sig]
             username_cliente = header[tam_A+tam_sig:].rstrip(b'\x00').decode()
-
             A = int.from_bytes(A_bytes, 'big')
+
+            print(f'Cliente {username_cliente} enviou A: {A} (bytes: {A_bytes})')
 
             pubkey_cliente = baixar_chave_publica(username_cliente) # Baixa chave pública do cliente
             
@@ -101,18 +108,40 @@ def main():
             B = pow(g, b, p)
             B_bytes = B.to_bytes(512, 'big')
 
+            print(f'B (bytes): {B_bytes.hex()}')
+            print(f'B (int): {B}')
+
+
             with open(privKeyPath, 'rb') as f:
                 privkey = serialization.load_pem_private_key(f.read(), password=None) # Carrega a chave privada ECDSA do servidor
             sig_B = privkey.sign(B_bytes + username.encode(), ec.ECDSA(hashes.SHA256())) # Assina B + username com a chave privada ECDSA
             user_bytes = username.encode().ljust(tam_user, b'\x00')
 
+            print(f'Username bytes: {user_bytes}')
+            print(f'tamanho de B_bytes: {len(B_bytes)}')
+            print(f'tamanho de sig_B: {len(sig_B)}')
+            print(f'tamanho de user_bytes: {len(user_bytes)}')
+            print('=====================================================')
+            
             conn.sendall(B_bytes + sig_B + user_bytes) # Envia B, sig_B, username_servidor
+
+            print('Pacote enviado:', B_bytes + sig_B + user_bytes)
+            print('=====================================================')
             # Calcula segredo compartilhado
             S = pow(A, b, p)
             S_bytes = S.to_bytes((S.bit_length()+7)//8, 'big')
 
+            print(f'Segredo compartilhado S (bytes): {S_bytes.hex()}')
+            print(f'Segredo compartilhado S (int): {S}')
+
+
             # 2. Deriva chaves
             key_aes, key_hmac= derivacao_chaves(S_bytes)
+            print(f'Chave AES: {key_aes.hex()}')
+            print(f'Chave HMAC: {key_hmac.hex()}')
+            print('Chaves derivadas com sucesso.')
+            print('Conexão estabelecida com sucesso!')
+            print('=====================================================')
             
             # 3. Loop de recebimento de mensagens seguras
             print('Aguardando mensagens do cliente. Pressione Ctrl+C para encerrar.')
@@ -123,17 +152,17 @@ def main():
                     break
                 hmac_tag = header[:HMAC_LEN]
                 iv = header[HMAC_LEN:HMAC_LEN+IV_LEN]
-                # Recebe o resto (mensagem cifrada)
-                ciphertext = b''
-                while True:
-                    chunk = conn.recv(4096)
-                    if not chunk:
-                        break
-                    ciphertext += chunk
-                    # Para chat, cada mensagem é um pacote, então pode sair do loop após o primeiro chunk
+                tam_cipher = int.from_bytes(header[HMAC_LEN+IV_LEN:HMAC_LEN+IV_LEN+4], 'big')
+                ciphertext = recv_all(conn, tam_cipher)
+                if ciphertext is None:
+                    print('Conexão encerrada ao receber ciphertext.')
                     break
                 # Verifica HMAC
                 hmac_calc = hmac.new(key_hmac, iv + ciphertext, hashlib.sha256).digest()
+                
+                print(f'HMAC recebido: {hmac_tag.hex()}')
+                print(f'HMAC calculado: {hmac_calc.hex()}')
+
                 if not hmac.compare_digest(hmac_tag, hmac_calc):
                     print('HMAC inválido! Mensagem rejeitada.')
                     continue
