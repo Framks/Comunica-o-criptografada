@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import requests
 from Crypto.Cipher import AES
-from Crypto.Util.Padding import unpad
+from Crypto.Util.Padding import unpad, pad
 from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Hash import SHA256
 from cryptography.hazmat.primitives import hashes, serialization
@@ -12,26 +12,27 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.backends import default_backend
+import threading
+import sys
+try:
+    import readline
+except ImportError:
+    readline = None
 
-# Parâmetros públicos DH (exemplo seguro para fins didáticos)
 p = int('''FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1\n29024E088A67CC74020BBEA63B139B22514A08798E3404DD\nEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245\nE485B576625E7EC6F44C42E9A63A3620FFFFFFFFFFFFFFFF'''.replace('\n',''), 16)
 g = 2
 
 HOST = '127.0.0.1'
 PORT = 65434
-PRIVKEY_PATH = 'server_ecdsa.pem'  # Caminho padrão para a chave privada ECDSA do servidor
-
-# Tamanho das chaves
-KEY_LEN = 32  # 256 bits para AES-256 e HMAC-SHA256
+PRIVKEY_PATH = 'server_ecdsa.pem'
+KEY_LEN = 32
 HMAC_LEN = 32
 IV_LEN = 16
 PBKDF2_ITER = 100_000
-
-# esse salto vai ser o mesmo do cliente
 SALT = b'saltseguro123456'
-
 USERNAME_SERVIDOR = 'Framks'
-# Função para baixar chave pública ECDSA do GitHub
+
+
 def baixar_chave_publica(username):
     url = f"https://github.com/{username}.keys"
     r = requests.get(url)
@@ -66,6 +67,54 @@ def recv_all(sock, n):
         data += packet
     return data
 
+def receber_mensagens(conn, key_aes, key_hmac):
+    while True:
+        try:
+            header = recv_all(conn, HMAC_LEN + IV_LEN + 4)
+            if not header:
+                sys.stdout.write('\r\033[K[Conexão encerrada pelo cliente.]\n')
+                sys.stdout.flush()
+                break
+            hmac_tag = header[:HMAC_LEN]
+            iv = header[HMAC_LEN:HMAC_LEN+IV_LEN]
+            tam_cipher = int.from_bytes(header[HMAC_LEN+IV_LEN:HMAC_LEN+IV_LEN+4], 'big')
+            ciphertext = recv_all(conn, tam_cipher)
+            if ciphertext is None:
+                sys.stdout.write('\r\033[K[Conexão encerrada ao receber ciphertext.]\n')
+                sys.stdout.flush()
+                break
+            hmac_calc = hmac.new(key_hmac, iv + ciphertext, hashlib.sha256).digest()
+            if not hmac.compare_digest(hmac_tag, hmac_calc):
+                continue
+            cipher = AES.new(key_aes, AES.MODE_CBC, iv)
+            try:
+                plaintext = unpad(cipher.decrypt(ciphertext), AES.block_size)
+                # Limpa a linha, imprime a mensagem recebida e reimprime o prompt e buffer
+                sys.stdout.write('\r\033[K[Cliente]: ' + plaintext.decode() + '\n')
+                if readline:
+                    line = readline.get_line_buffer()
+                    sys.stdout.write('Mensagem: ' + line)
+                else:
+                    sys.stdout.write('Mensagem: ')
+                sys.stdout.flush()
+            except Exception as e:
+                sys.stdout.write('\r\033[K[Erro ao descriptografar mensagem recebida: %s]\n' % e)
+                if readline:
+                    line = readline.get_line_buffer()
+                    sys.stdout.write('Mensagem: ' + line)
+                else:
+                    sys.stdout.write('Mensagem: ')
+                sys.stdout.flush()
+        except Exception as e:
+            sys.stdout.write('\r\033[K[Erro na thread de recebimento: %s]\n' % e)
+            if readline:
+                line = readline.get_line_buffer()
+                sys.stdout.write('Mensagem: ' + line)
+            else:
+                sys.stdout.write('Mensagem: ')
+            sys.stdout.flush()
+            break
+
 def main():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         username = input('Digite seu username do GitHub (default Framks e não maior que 32 caracteres): ') or USERNAME_SERVIDOR
@@ -96,9 +145,9 @@ def main():
             print(f'Cliente {username_cliente} enviou A: (bytes: {A_bytes.hex()})')
             print('=====================================================')
             print('Baixando chave pública do cliente...')
-            pubkey_cliente = baixar_chave_publica(username_cliente) # Baixa chave pública do cliente
+            pubkey_cliente = baixar_chave_publica(username_cliente)
             
-            verifica_assinatura(pubkey_cliente, sig_A, A_bytes, username_cliente) # Verifica assinatura
+            verifica_assinatura(pubkey_cliente, sig_A, A_bytes, username_cliente)
             print(f'Assinatura do cliente {username_cliente} verificada.')
             print('=====================================================')
             print('Calculando chave pública B...')
@@ -110,8 +159,8 @@ def main():
             print('=====================================================')
             print(f'Enviando B, assinatura e username para o cliente {username_cliente}...')
             with open(privKeyPath, 'rb') as f:
-                privkey = serialization.load_pem_private_key(f.read(), password=None) # Carrega a chave privada ECDSA do servidor
-            sig_B = privkey.sign(B_bytes + username.encode(), ec.ECDSA(hashes.SHA256())) # Assina B + username com a chave privada ECDSA
+                privkey = serialization.load_pem_private_key(f.read(), password=None)
+            sig_B = privkey.sign(B_bytes + username.encode(), ec.ECDSA(hashes.SHA256()))
             user_bytes = username.encode().ljust(tam_user, b'\x00')
             sig_B_len = len(sig_B)
             
@@ -120,7 +169,7 @@ def main():
             print(f'tamanho de user_bytes: {len(user_bytes)}')
             print('=====================================================')
             
-            conn.sendall(B_bytes + sig_B_len.to_bytes(1, 'big') + sig_B + user_bytes) # Envia B, sig_B, username_servidor
+            conn.sendall(B_bytes + sig_B_len.to_bytes(1, 'big') + sig_B + user_bytes)
 
             print('Pacote enviado:', (B_bytes + sig_B + user_bytes).hex())
             print('=====================================================')
@@ -139,35 +188,24 @@ def main():
             print('Conexão estabelecida com sucesso!')
             print('=====================================================')
             
-            # 3. Loop de recebimento de mensagens seguras
-            print('Aguardando mensagens do cliente. Pressione Ctrl+C para encerrar.')
+            print('Chat seguro iniciado. Digite "/sair" para encerrar.')
+            t = threading.Thread(target=receber_mensagens, args=(conn, key_aes, key_hmac), daemon=True)
+            t.start()
             while True:
-                # Leia o header completo: HMAC (32) + IV (16) + tam_cipher (4) = 52 bytes
-                header = recv_all(conn, HMAC_LEN + IV_LEN + 4)
-                if not header:
-                    print('Conexão encerrada pelo cliente.')
+                mensagem = input('Mensagem: ')
+                if mensagem.strip().lower() == '/sair':
+                    print('Encerrando chat.')
                     break
-                hmac_tag = header[:HMAC_LEN]
-                iv = header[HMAC_LEN:HMAC_LEN+IV_LEN]
-                tam_cipher = int.from_bytes(header[HMAC_LEN+IV_LEN:HMAC_LEN+IV_LEN+4], 'big')
-                ciphertext = recv_all(conn, tam_cipher)
-                if ciphertext is None:
-                    print('Conexão encerrada ao receber ciphertext.')
-                    break
-                # Verifica HMAC
-                hmac_calc = hmac.new(key_hmac, iv + ciphertext, hashlib.sha256).digest()
-                print(f'HMAC recebido: {hmac_tag.hex()}')
-                print(f'HMAC calculado: {hmac_calc.hex()}')
-                if not hmac.compare_digest(hmac_tag, hmac_calc):
-                    print('HMAC inválido! Mensagem rejeitada.')
-                    continue
-                # Descriptografa
+                msg_bytes = mensagem.encode()
+                iv = secrets.token_bytes(IV_LEN)
                 cipher = AES.new(key_aes, AES.MODE_CBC, iv)
-                try:
-                    plaintext = unpad(cipher.decrypt(ciphertext), AES.block_size)
-                    print('Mensagem recebida (decriptada):', plaintext.decode())
-                except Exception as e:
-                    print('Erro ao descriptografar:', e)
+                ciphertext = cipher.encrypt(pad(msg_bytes, AES.block_size))
+                hmac_tag = hmac.new(key_hmac, iv + ciphertext, hashlib.sha256).digest()
+                tam_cipher = len(ciphertext).to_bytes(4, 'big')
+                pacote = hmac_tag + iv + tam_cipher + ciphertext
+                conn.sendall(pacote)
+                print('Mensagem enviada.')
+            conn.close()
 
 if __name__ == '__main__':
     main()

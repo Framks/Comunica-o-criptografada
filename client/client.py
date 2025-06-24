@@ -11,19 +11,22 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.backends import default_backend
+import threading
+import sys
+try:
+    import readline
+except ImportError:
+    readline = None
 
-# Parâmetros públicos DH (devem ser idênticos ao do servidor)
 p = int('''FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1\n29024E088A67CC74020BBEA63B139B22514A08798E3404DD\nEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245\nE485B576625E7EC6F44C42E9A63A3620FFFFFFFFFFFFFFFF'''.replace('\n',''), 16)
 g = 2
-
 KEY_LEN = 32
 HMAC_LEN = 32
 IV_LEN = 16
 PBKDF2_ITER = 100_000
 SALT = b'saltseguro123456'
-
-USERNAME_CLIENTE = 'Framks'  # No caso em particular o username é o meu.
-PRIVKEY_PATH = 'cliente_ecdsa.pem'  # Caminho padrão para a chave privada ECDSA do cliente
+USERNAME_CLIENTE = 'Framks'
+PRIVKEY_PATH = 'cliente_ecdsa.pem'
 
 def baixar_chave_publica(username):
     url = f"https://github.com/{username}.keys"
@@ -58,6 +61,54 @@ def recv_all(sock, n):
             return None
         data += packet
     return data
+
+def receber_mensagens(sock, key_aes, key_hmac):
+    while True:
+        try:
+            header = recv_all(sock, HMAC_LEN + IV_LEN + 4)
+            if not header:
+                sys.stdout.write('\r\033[K[Conexão encerrada pelo servidor.]\n')
+                sys.stdout.flush()
+                break
+            hmac_tag = header[:HMAC_LEN]
+            iv = header[HMAC_LEN:HMAC_LEN+IV_LEN]
+            tam_cipher = int.from_bytes(header[HMAC_LEN+IV_LEN:HMAC_LEN+IV_LEN+4], 'big')
+            ciphertext = recv_all(sock, tam_cipher)
+            if ciphertext is None:
+                sys.stdout.write('\r\033[K[Conexão encerrada ao receber ciphertext.]\n')
+                sys.stdout.flush()
+                break
+            hmac_calc = hmac.new(key_hmac, iv + ciphertext, hashlib.sha256).digest()
+            if not hmac.compare_digest(hmac_tag, hmac_calc):
+                continue
+            cipher = AES.new(key_aes, AES.MODE_CBC, iv)
+            try:
+                from Crypto.Util.Padding import unpad
+                plaintext = unpad(cipher.decrypt(ciphertext), AES.block_size)
+                sys.stdout.write('\r\033[K[Servidor]: ' + plaintext.decode() + '\n')
+                if readline:
+                    line = readline.get_line_buffer()
+                    sys.stdout.write('Mensagem: ' + line)
+                else:
+                    sys.stdout.write('Mensagem: ')
+                sys.stdout.flush()
+            except Exception as e:
+                sys.stdout.write('\r\033[K[Erro ao descriptografar mensagem recebida: %s]\n' % e)
+                if readline:
+                    line = readline.get_line_buffer()
+                    sys.stdout.write('Mensagem: ' + line)
+                else:
+                    sys.stdout.write('Mensagem: ')
+                sys.stdout.flush()
+        except Exception as e:
+            sys.stdout.write('\r\033[K[Erro na thread de recebimento: %s]\n' % e)
+            if readline:
+                line = readline.get_line_buffer()
+                sys.stdout.write('Mensagem: ' + line)
+            else:
+                sys.stdout.write('Mensagem: ')
+            sys.stdout.flush()
+            break
 
 def main():
     print("Para começar vc tem que ter uma chave privada ECDSA gerada com o comando:")
@@ -131,6 +182,9 @@ def main():
         print('=====================================================')
 
         print('Digite "/sair" para encerrar o chat.')
+        # Inicia thread de recebimento
+        t = threading.Thread(target=receber_mensagens, args=(s, key_aes, key_hmac), daemon=True)
+        t.start()
         while True:
             mensagem = input('Mensagem: ')
             if mensagem.strip().lower() == '/sair':
@@ -145,5 +199,6 @@ def main():
             pacote = hmac_tag + iv + tam_cipher + ciphertext
             s.sendall(pacote)
             print('Mensagem enviada.')
+        s.close()
 if __name__ == '__main__':
     main()
