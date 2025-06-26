@@ -3,7 +3,7 @@ import secrets
 import hashlib
 import hmac
 from Crypto.Cipher import AES
-from Crypto.Util.Padding import pad
+from Crypto.Util.Padding import pad, unpad
 from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Hash import SHA256
 import requests
@@ -63,8 +63,8 @@ def recv_all(sock, n):
     return data
 
 def receber_mensagens(sock, key_aes, key_hmac):
-    while True:
-        try:
+    try:
+        while True:
             header = recv_all(sock, HMAC_LEN + IV_LEN + 4)
             if not header:
                 sys.stdout.write('\r\033[K[Conexão encerrada pelo servidor.]\n')
@@ -80,43 +80,41 @@ def receber_mensagens(sock, key_aes, key_hmac):
                 break
             hmac_calc = hmac.new(key_hmac, iv + ciphertext, hashlib.sha256).digest()
             if not hmac.compare_digest(hmac_tag, hmac_calc):
+                sys.stdout.write('\r\033[K[HMAC inválido, ignorando mensagem]\n')
+                sys.stdout.flush()
                 continue
             cipher = AES.new(key_aes, AES.MODE_CBC, iv)
-            try:
-                from Crypto.Util.Padding import unpad
-                plaintext = unpad(cipher.decrypt(ciphertext), AES.block_size)
-                sys.stdout.write('\r\033[K[Servidor]: ' + plaintext.decode() + '\n')
-                if readline:
-                    line = readline.get_line_buffer()
-                    sys.stdout.write('Mensagem: ' + line)
-                else:
-                    sys.stdout.write('Mensagem: ')
-                sys.stdout.flush()
-            except Exception as e:
-                sys.stdout.write('\r\033[K[Erro ao descriptografar mensagem recebida: %s]\n' % e)
-                if readline:
-                    line = readline.get_line_buffer()
-                    sys.stdout.write('Mensagem: ' + line)
-                else:
-                    sys.stdout.write('Mensagem: ')
-                sys.stdout.flush()
-        except Exception as e:
-            sys.stdout.write('\r\033[K[Erro na thread de recebimento: %s]\n' % e)
+            plaintext = unpad(cipher.decrypt(ciphertext), AES.block_size)
+            sys.stdout.write('\r\033[K[Servidor]: ' + plaintext.decode() + '\n')
             if readline:
                 line = readline.get_line_buffer()
                 sys.stdout.write('Mensagem: ' + line)
             else:
                 sys.stdout.write('Mensagem: ')
             sys.stdout.flush()
-            break
+    except Exception as e:
+        sys.stdout.write('\r\033[K[Erro na thread de recebimento: %s]\n' % e)
+        sys.stdout.flush()
 
-def main():
+def print_banner():
+    print(r"""
+ ██████╗██╗  ██╗ █████╗ ████████╗███████╗██████╗ ██╗███╗   ██╗ █████╗ ██████╗ ███████╗
+██╔════╝██║  ██║██╔══██╗╚══██╔══╝██╔════╝██╔══██╗██║████╗  ██║██╔══██╗██╔══██╗██╔════╝
+██║     ███████║███████║   ██║   █████╗  ██████╔╝██║██╔██╗ ██║███████║██████╔╝█████╗  
+██║     ██╔══██║██╔══██║   ██║   ██╔══╝  ██╔══██╗██║██║╚██╗██║██╔══██║██║  ██║██╔══╝  
+╚██████╗██║  ██║██║  ██║   ██║   ███████╗██████╔╝██║██║ ╚████║██║  ██║██║  ██║███████╗
+ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═════╝ ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝                                                                                     
+    """)
+    print("bem vindo ao chat seguro!")
     print("Para começar vc tem que ter uma chave privada ECDSA gerada com o comando:")
     print("openssl ecparam -name prime256v1 -genkey -noout -out cliente_ecdsa.pem")
     print("E a chave pública do servidor deve estar no GitHub do usuário que você deseja se conectar.")
     print("Certifique-se de que o servidor está rodando e que você tem a chave pública do servidor no GitHub.")
     print("Pressione Enter para continuar...")
     input()
+
+def main():
+    print_banner()
     host = input('Digite o IP do servidor (default 127.0.0.1): ') or '127.0.0.1'
     port = input('Digite a porta do servidor (default 65432): ') or 65434
     privKeyPath = input('Digite o caminho para a chave privada ECDSA do cliente (default cliente_ecdsa.pem): ') or PRIVKEY_PATH
@@ -128,28 +126,28 @@ def main():
         A = pow(g, a, p)
         A_bytes = A.to_bytes(512, 'big')
 
-        print(f'Chave pública A: (bytes: {A_bytes.hex()})')
-        print('=====================================================')
+        print(f'Chave pública A: (bytes: {A_bytes.hex()})\n')
+        print('=====================================================\n')
         
         with open(privKeyPath, 'rb') as f:
             privkey = serialization.load_pem_private_key(f.read(), password=None)
         sig_A = privkey.sign(A_bytes + username.encode(), ec.ECDSA(hashes.SHA256()))
-        print(f'Assinatura A: {sig_A.hex()} (tamanho: {len(sig_A)} bytes)')
+        print(f'Assinatura A: {sig_A.hex()} (tamanho: {len(sig_A)} bytes)\n')
 
         sig_A_len = len(sig_A)
         user_bytes = username.encode().ljust(32, b'\x00')
 
-        print(f'Enviando (A_bytes + sig_A + username) para o servidor...')
+        print(f'Enviando (A_bytes + sig_A + username) para o servidor...\n')
         s.sendall(A_bytes + sig_A_len.to_bytes(1, 'big') + sig_A + user_bytes)
 
 
         tam_B = 512
         tam_sig_len = 1
         tam_user = 32
-        print('Recebendo B_bytes, sig_B e username do servidor...')
+        print('Recebendo B_bytes, sig_B e username do servidor...\n')
         header = recv_all(s, tam_B + tam_sig_len)
         if not header:
-            print('Conexão encerrada prematuramente ao receber header do servidor.')
+            print('Conexão encerrada prematuramente ao receber header do servidor.\n')
             return
         B_bytes = header[:tam_B]
         sig_B_len = header[tam_B]
@@ -157,16 +155,16 @@ def main():
         user_bytes = recv_all(s, tam_user)
         username_servidor = user_bytes.rstrip(b'\x00').decode()
         B = int.from_bytes(B_bytes, 'big')
-        print(f'Servidor {username_servidor} enviou B: (bytes: {B_bytes.hex()})')
-        print(f'Signature length: {sig_B_len}, Signature: {sig_B.hex()}')
-        print('=====================================================')
-        print(f'Verificando assinatura do servidor {username_servidor}...')
+        print(f'Servidor {username_servidor} enviou B: (bytes: {B_bytes.hex()})\n')
+        print(f'Signature length: {sig_B_len}, Signature: {sig_B.hex()}\n')
+        print('=====================================================\n')
+        print(f'Verificando assinatura do servidor {username_servidor}...\n')
 
         pubkey_servidor = baixar_chave_publica(username_servidor)     
         verifica_assinatura(pubkey_servidor, sig_B, B_bytes, username_servidor)
-        print(f'Assinatura do servidor {username_servidor} verificada.') 
-        print('=====================================================')
-        print('Calculando segredo compartilhado S...')
+        print(f'Assinatura do servidor {username_servidor} verificada.\n') 
+        print('=====================================================\n')
+        print('Calculando segredo compartilhado S...\n')
 
         B = int.from_bytes(B_bytes, 'big')
         S = pow(B, a, p)
@@ -174,12 +172,12 @@ def main():
 
         key_aes, key_hmac = derivacao_chaves(S_bytes)
 
-        print(f'Secreto compartilhado S: (bytes: {S_bytes.hex()})')
-        print(f'Chave AES: {key_aes.hex()}')
-        print(f'Chave HMAC: {key_hmac.hex()}')
+        print(f'Secreto compartilhado S: (bytes: {S_bytes.hex()})\n')
+        print(f'Chave AES: {key_aes.hex()}\n')
+        print(f'Chave HMAC: {key_hmac.hex()}\n')
         print('Chaves derivadas com sucesso.')
         print('Conexão estabelecida com sucesso!')
-        print('=====================================================')
+        print('=====================================================\n')
 
         print('Digite "/sair" para encerrar o chat.')
         # Inicia thread de recebimento
