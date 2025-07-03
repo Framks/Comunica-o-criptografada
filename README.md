@@ -1,4 +1,4 @@
-# Comunicação Criptografada - Chat Seguro Cliente/Servidor
+# BlackBox Chat - Comunicação Criptografada Cliente/Servidor
 
 Este projeto implementa um chat seguro entre cliente e servidor em Python, com autenticação mútua baseada em ECDSA (chaves do GitHub), troca de chaves Diffie-Hellman, derivação de chaves com PBKDF2, criptografia AES-CBC e autenticação de mensagens com HMAC-SHA256. O chat é bidirecional e permite que ambos os lados enviem e recebam mensagens simultaneamente, como em um chat real.
 
